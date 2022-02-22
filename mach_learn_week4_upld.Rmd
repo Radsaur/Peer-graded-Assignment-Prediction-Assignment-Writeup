@@ -1,0 +1,138 @@
+---
+title: 'Peer-graded Assignment: Prediction Assignment Writeup'
+author: "Radsaur"
+date: "22 02 2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## 1.Introduction
+
+The purpose of this assignment is to predict the manner in which they did the exercise. The manner is shown by the "classe" variable. 
+
+## 2.Data pre-processing
+
+### 2.1 Importing the data files
+The first step in each analysis is to import the data. The code below shows how we set the directory and import the required files into the R-Studio environment. 
+```{r cars, cache=TRUE}
+setwd('D:/DOCS/Sauran.S/R/Coursera/8.mash_learn')
+train<- read.csv('pml-training.csv')
+test<-read.csv('pml-testing.csv')
+```
+
+### 2.2 Libraries
+We also need to import libraries. Without having the right libraries, coding might take too much time and effort. 
+```{r, cache=TRUE, results='hide', error=FALSE, message=FALSE}
+library(dplyr)
+library(caret)
+library(randomForest)
+```
+
+### 2.3 Near Zero Variance
+In some situations, data sets contain predictors that only have a single unique value (i.e. a “zero-variance predictor”) or a couple of unique values one of whcih covers more than 90% of the data set ("near-zero variance predictor"). For many models (excluding tree-based models), this may cause the model to crash or the fit to be unstable. Moreover, such variables are not helpful in modelling because they are highly constant for most of the output data. 
+
+For instance, classe variable has 5 unique observations from A to E. If the predictor variable is the same for all the output i.e. hearbits are 80 for A, B, C and etc. Of course it would be very problematic to predcit classe from such a variable. 
+
+The code below is used to remove near zero variance. 
+```{r, cache=TRUE}
+#checking the near zero variance and removing them from the data set
+nzv<-nearZeroVar(train,saveMetrics = T)
+train1<-train %>% select(-(nzv[nzv$nzv,] %>% rownames()))
+
+#we remove X whcih is just the order number of the observation. this variable is useless for the analysis
+train1<-train1[,-1]
+```
+
+### 2.4 NAs imputation 
+Let's check the NA's. We sum-up all NAs in the data set and discovered that there are 787,856 NAs.
+```{r, cache=TRUE}
+apply(train1,2,function(x)sum(is.na(x))) %>% sum()
+```
+Now we have to remove the NAs. The easiest way to do so is using the mputation on the data sets. Imputation replaces NAs with actual values based only on information in the training set. We suggest K-nearest neighbors. For an arbitrary sample, the K closest neighbors are found in the training set and the value for the predictor is imputed using the mean of those values. 
+```{r, cache=TRUE}
+nzv_knn<-preProcess(train1 %>% select(-classe),method= "knnImpute")
+train_knn<-predict(nzv_knn, train1%>% select(-classe))
+```
+
+
+### 2.5 Multicollinearity
+The model must be parsimonous. So we have to remove all collinear predictors.
+The code below identifies all the variables with more than 75% correlation. Such variables are then removed.
+```{r,cache=TRUE}
+#remvoving collinear vectors
+descrCor <- cor(train_knn %>% select_if(function(x)is.numeric(x)|is.integer(x)))
+highlyCorDescr <- findCorrelation(descrCor, cutoff = .75)
+train_knn<-train_knn %>% select(-colnames(descrCor)[highlyCorDescr])
+
+```
+
+### 2.6 Pre-processing - conclusion
+Now the pre-processing is almost finished. We removed 
+
+1. NAs;
+2. near zero variance;
+3. collinear variables. 
+
+The data set is almost ready for the modelling. The onlu thing left is the dependent variable. Previously we removed it from the data set because this variable must not be affected by the pre-processing algorithms. 
+
+```{r,cache=TRUE}
+#adding back the predictor variable
+train_knn$classe<- train$classe
+```
+
+## 3.Modelling
+Now, we have to inspect carefully the dependent variable in order to check whcih model should be used.
+Checking the nature of the dependent variable
+```{r}
+library(dplyr)
+train_knn$classe %>% class
+```
+The variable is a factor.Now, we inspect the frequency of classe unique values
+```{r,cache=TRUE}
+y<-as.data.frame(table(train_knn$classe, useNA = 'ifany'))
+y<-y[order(y$Freq,decreasing = T),]
+y$Percent<-round(y$Freq/sum(y$Freq)*100,2)
+y
+```
+So, the dependent variable is a factor with 5 levels. It fairly balanced. Unfortunately, we cannot use simple regression algorithms such as glm or LM due to the nature of the dependent variable. We therefore tried to use ordered logistic regression, but the algorithm broke... As a result, we chose b/w the following algorithms:
+
+1) decision trees;
+2) random forest;
+3) xgboost.
+
+Out of the three option described above, we decided to use random forest as it requires less tunning. We wanted to apply the cross validation using 'control' and 'train' functions. However, this operation demands too much computing power which we do not have.
+```{r,cache=TRUE}
+model_rf<- randomForest(classe~.,train_knn)
+model_rf
+```
+The model looks quite accurate. So we can use it for prediction
+
+## Prediction
+Let's predict. However, before doing that, we have to pre-process the test set in the same way as the training set. 
+```{r,cache=TRUE}
+test_knn<- predict(nzv_knn,test)
+```
+Predicting:
+```{r,cache=TRUE}
+  if(inherits(try(predict(model_rf, test_knn)), "try-error"))
+  {
+    #error handling code, maybe just skip this iteration using
+  }
+```
+We see the mistake notification. I've spent some time searching it on stack.overflow. Finally, I've discovered that it happens beacuase the train and the test sets have the same factor variable but with different levels. The algorithm is able to work only if all factors in the train set have the same factor levels as the same factors in test sets. We therefore need to define factor variables
+```{r,cache=TRUE}
+train_knn %>% select_if(is.factor) %>% colnames()
+```
+The "classe" variable is the output. So we don't need it. The next code will be apploed to "user_name" and "cvtd_timestamp" to recover the factor levels. 
+```{r}
+levels(test_knn$user_name)<-levels(train_knn$user_name)
+levels(test_knn$cvtd_timestamp)<-levels(train_knn$cvtd_timestamp)
+```
+
+Predicting 
+```{r,cache=TRUE}
+predict(model_rf, test_knn)
+```
